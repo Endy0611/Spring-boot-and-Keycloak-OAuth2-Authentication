@@ -1,0 +1,3 @@
+spring:
+  application:
+    name: Keycloak_Spring_Boot

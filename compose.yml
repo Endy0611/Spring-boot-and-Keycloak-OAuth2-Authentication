@@ -1,0 +1,88 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: keycloak-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: keycloak
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - keycloak-net
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0   # Official Keycloak image, version 26.0
+    container_name: keycloak                # Fixed container name, easy to find in docker ps
+    restart: unless-stopped                 # Auto start again after crash or reboot
+    # "start-dev" = easy mode for testing (HTTP allowed). Use "start" for production.
+    # "--import-realm" = load realm JSON files from the import folder on first start.
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_DB: postgres                                      # Use PostgreSQL instead of the built-in H2 database
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak  # Where the database is (host "postgres" = the service name above)
+      KC_DB_USERNAME: keycloak                             # Database user name
+      KC_DB_PASSWORD: keycloak                             # Database password
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin                   # First admin user, created only on the very first start
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin                   # Password of that first admin
+      KC_HEALTH_ENABLED: "true"                            # Turn on /health endpoints to check if Keycloak is OK
+      KC_METRICS_ENABLED: "true"                           # Turn on /metrics endpoint for monitoring
+    ports:
+      - "8080:8080"   # Main Keycloak site and admin console: http://localhost:8080
+      - "9000:9000"   # Management port for /health and /metrics
+    volumes:
+      - ./keycloak/import:/opt/keycloak/data/import:ro   # Put realm JSON files here to import them (read-only)
+      - ./keycloak/themes:/opt/keycloak/themes           # Put custom login page themes here (optional)
+    depends_on:
+      postgres:
+        condition: service_healthy   # Wait until Postgres is ready before starting Keycloak
+    networks:
+      - keycloak-net                 # Same private network as Postgres so they can talk
+
+  # Fake SMTP server: catches the emails Keycloak sends (verify email, reset password...).
+  # In Keycloak realm settings > Email: host=mailpit, port=1025, no auth/SSL.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: keycloak-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"   # Web UI (http://localhost:8025)
+      - "1025:1025"   # SMTP
+    networks:
+      - keycloak-net
+
+  # DB browser. Login: admin@local.dev / admin, then add server host=postgres, user/pass=keycloak.
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: keycloak-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"     # http://localhost:5050
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - keycloak-net
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+
+networks:
+  keycloak-net:
+    driver: bridge
